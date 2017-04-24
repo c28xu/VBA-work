@@ -1,0 +1,118 @@
+Sub exportRange(ByVal savePathAndFileName As String, ByVal sourceRange As String)
+    
+    'Workbooks.Application.Sheets(sourceSheet).Select
+    Range(sourceRange).Select
+    Selection.Copy
+    Workbooks.Add
+    ActiveSheet.Paste Link:=True
+    Application.DisplayAlerts = False
+    ActiveWorkbook.SaveAs fileName:=savePathAndFileName, FileFormat:=xlCSV, CreateBackup:=False, ConflictResolution:=xlLocalSessionChanges
+    ActiveWorkbook.Close
+    Application.DisplayAlerts = True
+
+End Sub
+
+Public Sub writeRange(rangeName As String, _
+                            ByVal fileName As String, _
+                            notepadCol As Integer, _
+                            Optional ByVal asCSV As Boolean = False, _
+                            Optional ByVal preserveFormats As Boolean = False, _
+                            Optional ByVal isUnix As Boolean = False, _
+                            Optional strDelimiter As Variant, _
+                            Optional strEncloser As Variant, _
+                            Optional padCommas As Boolean = True)
+Dim pathAndFileName As String
+Dim fileNumber As Integer
+Dim r As Range, i As Integer, j As Integer
+Dim nRows As Integer, nCols As Integer
+Dim sep As String, lineSep As String
+Dim strDlmtr As String, strEnclsr As String
+Dim colsToExport As Integer
+
+'Make sure option values/defaults are set
+If IsMissing(strDelimiter) Then strDlmtr = " " Else strDlmtr = strDelimiter
+If IsMissing(strEncloser) Then strEnclsr = "" Else strEnclsr = strEncloser
+
+If (isUnix) Then
+   lineSep = vbLf
+Else
+   lineSep = vbCrLf
+End If
+
+pathAndFileName = fileName
+
+fileNumber = FreeFile
+On Error GoTo badFileName
+Open pathAndFileName For Output As #fileNumber
+On Error GoTo 0
+
+'If (IsObject(rangeName)) Then
+'  Set r = rangeName
+'Else
+  Set r = Range(rangeName)
+'End If
+
+If (IsArray(r.Value)) Then
+  nRows = UBound(r.Value, 1)
+  nCols = UBound(r.Value, 2)
+  For i = 1 To nRows
+    sep = ""
+    colsToExport = nCols
+    If Not padCommas Then
+        For j = nCols To 1 Step -1
+            If (r(i, j).Value <> Empty) Then
+                Exit For
+            End If
+            colsToExport = j
+        Next j
+        colsToExport = colsToExport - 1
+    End If
+    For j = 1 To colsToExport
+      'Write #fileNumber, r(i, j).Value;
+      If (IsError(r(i, j).Value)) Then
+        Print #fileNumber, sep; "ERROR";
+      Else
+        If (preserveFormats) Then
+          If j = notepadCol Then
+            tmpVal = Chr(34) & r(i, j).Text & Chr(34)
+            Print #fileNumber, sep; strEnclsr; tmpVal; strEnclsr;
+          Else
+            Print #fileNumber, sep; strEnclsr; r(i, j).Text; strEnclsr;
+          End If
+        Else
+          If j = notepadCol Then
+            tmpVal = Chr(34) & Trim(r(i, j).Value) & Chr(34)
+            Print #fileNumber, sep; strEnclsr; tmpVal; strEnclsr;
+          Else
+            Print #fileNumber, sep; strEnclsr; Trim(r(i, j).Value); strEnclsr;
+          End If
+        End If
+      End If
+      If (asCSV) Then
+        sep = ","
+      Else
+        sep = strDlmtr
+      End If
+    Next j
+    'Write #fileNumber, r(i, j).Value
+    Print #fileNumber, lineSep;
+  Next i
+Else
+  If (IsError(r.Value)) Then
+    Print #fileNumber, "ERROR", lineSep;
+  ElseIf (preserveFormats) Then
+    Print #fileNumber, strEnclsr, r.Text, strEnclsr, lineSep;
+  Else
+    Print #fileNumber, strEnclsr, Trim(r.Value), strEnclsr, lineSep;
+  End If
+End If
+
+Close #fileNumber
+Exit Sub
+
+badFileName:
+ Call MsgBox("Unable to open " & pathAndFileName & ".  Aborting.")
+End Sub
+
+
+
