@@ -1,0 +1,536 @@
+Sub exportpnlAccess()
+
+    Dim ns As NameSpace                 'current outlook window's namespace
+    Dim strSignname As String           'stores the sender/Analyst's name
+    Dim MailSub, MailSub2 As String               'stores email subject
+    Dim mySentDate As Date              'stores date and time on which email was sent
+    Dim messageText As String           'stores body of the email as a text string
+    Dim SentToname As String            'stores the Trader's name
+    Dim bkName As String                'stores name of book
+    Dim ValDate As String               'stores P&L Date
+    Dim SubjDate, SubjDate1, SubjDate2 As Date        'stores two P&L dates
+    Dim subjDateArr() As Variant
+    
+    Dim objApp As Outlook.Application   'The current instance of outlook
+    Dim olApproved As MAPIFolder        'the Profit and Loss folder
+    Dim getItem As Outlook.MailItem     'current mail item
+    Dim getNextItem As Outlook.MailItem     'current mail item
+    Dim XlsApp As Object                'stores an instance of excel
+    Dim PlTracker As Object             'stores the name of The PL tracking tool file
+    Dim PlSheet As Object               'stores the name of the "tracker data" sheet
+    Dim entryRow As Integer             'stores the row number of the entry to be modified
+    Dim trackerPath As String           'stores the location of the P&L tracker
+    Dim trackerName As String           'stores Tracking Tool name
+    Dim numEntries As Integer           'stores the number of entries detected in the tracker that correspond to the approval/rejection in the email
+    
+    Dim BooknameArr() As Variant
+    Dim Booknum As Integer
+    Dim Tempname As String
+ 
+    '************************************************************************
+    ' Checking for existing approval messages and if Tracking Tool is in use
+    '************************************************************************
+    
+    'set folder path to find approval messages
+    
+    Set objApp = Application                        'set the active instance of outlook
+    Set ns = GetNamespace("MAPI")                   'define the namespace of the active instance of outlook
+    Set olApproved = ns.GetDefaultFolder(olFolderInbox).Folders("Profit and Loss")
+    
+    'if there are no new approval messages, exit macro
+    If olApproved.Items.Count = 0 Then
+        'MsgBox "There are no new messages in the folder. All approval messages have been updated in DB.", vbInformation, _
+               "Nothing Found"
+        Exit Sub
+    End If
+    
+
+    '**********************************************************************
+    '          Retrieve information from Email and export to tracker
+    '**********************************************************************
+
+'    Set getItem = olApproved.Items.GetFirst
+     
+    Set getItem = olApproved.Items.GetLast
+    
+    'Create an instance of Access & Connect to DB
+    Dim cnn As ADODB.Connection
+    Dim rst As ADODB.Recordset  'Tracking table
+    
+    Set cnn = New ADODB.Connection
+    cnn.Open "Provider=Microsoft.ACE.OLEDB.12.0; " & _
+        "Data Source=PCM tracker_GED.accdb;"
+    Set rst = New ADODB.Recordset
+    rst.Open "Tbl_Log_DailyPCMTracker", cnn, adOpenKeyset, adLockOptimistic, adCmdTable
+
+    
+    'start loop
+    Do While Not getItem Is Nothing
+    
+     ' ******************************************************************************************************
+      ' To incorporate INDEX ARBITRAGE, EQUITYLIO, EQUITYLSO/EQUITYCVGE P&L for the close of"
+      
+        If InStr(getItem.Subject, "INDEX ARBITRAGE, EQUITYLIO, EQUITYLSO/EQUITYCVGE P&L") <> 0 Then
+        
+           bkName = "EQUITYIA"
+           mySentDate = getItem.SentOn
+           ValDate = Right(getItem.Subject, Len(getItem.Subject) - 70)
+           SentToname = getItem.To
+           strSignname = getItem.SenderName
+                
+           If InStr(1, strSignname, "(") <> 0 Then     'used to check if there is a "(scotia capital)" after the sender's name and removes it
+              strSignname = Trim(Left(strSignname, InStr(1, strSignname, "(") - 1))
+           End If
+          
+           messageText = getItem.Body
+           MailSub = Trim(getItem.Subject)
+           
+            'search to see if subject line is in tracking table
+            strCriteria = "[EmailSubject] = " & "'" & MailSub & "'"             'setting search criteria for Access Table
+            rst.MoveFirst
+            rst.Find Criteria:=strCriteria, SearchDirection:=adSearchForward    'search Access table
+            If rst.EOF Then
+               With rst     'add data to Approval table
+                     .AddNew ' create a new record
+                     .Fields("BookID") = bkName
+                     .Fields("Production_Analyst") = strSignname
+                     .Fields("TimeSent") = mySentDate
+                     
+                     If IsDate(ValDate) Then
+                
+                     .Fields("ValDate") = ValDate
+                     
+                     End If
+                     
+                     .Fields("DateSent") = mySentDate
+                     .Fields("FO_Signer") = SentToname
+                     .Fields("EmailSubject") = MailSub
+                     .Fields("ApprovedOrRejected") = 0
+                     .Update ' stores the new record
+                End With
+            Else
+            End If
+                     
+            
+            
+                On Error GoTo Err_Macro
+         
+                  
+            'Set mail to "read" and move it to appropriate folder. If folder does not exist, create folder under Approved folder
+            getItem.UnRead = False
+            
+            On Error Resume Next
+            If olApproved.Folders(bkName) = "" Then
+                olApproved.Folders.Add (bkName)
+            End If
+            
+            On Error GoTo Err_Macro
+            getItem.Move olApproved.Folders(bkName)
+            
+            Set getItem = olApproved.Items.GetLast
+           
+         GoTo abc
+        
+         End If
+     ' ******************************************************************************************************
+     
+     ' To incorporate same strategy Combined P&L template
+     
+        If InStr(getItem.Subject, "Combined Final P&L") <> 0 Then
+         
+         If Not InStr(getItem.Subject, "to") <> 0 Then ' Single day email
+         
+              mySentDate = getItem.SentOn
+              ValDate = Trim(Right(getItem.Subject, Len(getItem.Subject) - InStr(1, getItem.Subject, "for") - 3))
+              SentToname = getItem.To
+              strSignname = getItem.SenderName
+                   
+              If InStr(1, strSignname, "(") <> 0 Then     'used to check if there is a "(scotia capital)" after the sender's name and removes it
+                 strSignname = Trim(Left(strSignname, InStr(1, strSignname, "(") - 1))
+              End If
+             
+              messageText = getItem.Body
+              MailSub = Trim(getItem.Subject)
+              
+              ' to get Array of book names
+           
+               Booknum = StringCountOccurrences(getItem.Subject, ",") + 1
+               ReDim BooknameArr(Booknum - 1) As Variant
+               
+               BooknameArr(0) = Trim(Mid(getItem.Subject, 1, InStr(1, getItem.Subject, ",") - 1))
+               
+               Tempname = getItem.Subject
+               
+               For i = 1 To Booknum - 1
+                  Tempname = Trim(Right(Tempname, Len(Tempname) - Len(BooknameArr(i - 1)) - 1))
+                  
+                  If InStr(Tempname, ",") Then
+                     BooknameArr(i) = Trim(Mid(Tempname, 1, InStr(1, Tempname, ",") - 1))
+                  Else
+                     BooknameArr(i) = Trim(Mid(Tempname, 1, InStr(1, Tempname, "-") - 2))
+                  End If
+                  
+                Next
+               
+              
+               
+               For j = LBound(BooknameArr()) To UBound(BooknameArr())
+               
+                  With rst     'add data to Approval table
+                        .AddNew ' create a new record
+                        .Fields("BookID") = BooknameArr(j)
+                        .Fields("Production_Analyst") = strSignname
+                        .Fields("TimeSent") = mySentDate
+                        
+                        If IsDate(ValDate) Then
+                        .Fields("ValDate") = ValDate
+                        End If
+                        .Fields("DateSent") = mySentDate
+                        .Fields("FO_Signer") = SentToname
+                        .Fields("EmailSubject") = MailSub
+                        .Fields("ApprovedOrRejected") = 0
+                        .Update ' stores the new record
+                   End With
+               
+               Next
+           
+               On Error GoTo Err_Macro
+        
+                 
+               'Set mail to "read" and move it to appropriate folder. If folder does not exist, create folder under Approved folder
+               getItem.UnRead = False
+               
+               On Error Resume Next
+               
+               If olApproved.Folders(BooknameArr(0)) = "" Then
+                   olApproved.Folders.Add (BooknameArr(0))
+               End If
+               
+               On Error GoTo Err_Macro
+               getItem.Move olApproved.Folders(BooknameArr(0))
+               
+               Set getItem = olApproved.Items.GetLast
+           
+               GoTo abc
+         Else             'multiple dates
+              mySentDate = getItem.SentOn
+              'ValDate = Trim(Right(getItem.Subject, Len(getItem.Subject) - InStr(1, getItem.Subject, "for") - 3))
+              SentToname = getItem.To
+              strSignname = getItem.SenderName
+                   
+              If InStr(1, strSignname, "(") <> 0 Then     'used to check if there is a "(scotia capital)" after the sender's name and removes it
+                 strSignname = Trim(Left(strSignname, InStr(1, strSignname, "(") - 1))
+              End If
+             
+              messageText = getItem.Body
+              MailSub = Trim(getItem.Subject)
+              
+              ' to get Array of book names
+           
+               Booknum = StringCountOccurrences(getItem.Subject, ",") + 1
+               ReDim BooknameArr(Booknum - 1) As Variant
+               
+               BooknameArr(0) = Trim(Mid(getItem.Subject, 1, InStr(1, getItem.Subject, ",") - 1))
+               
+               Tempname = getItem.Subject
+               
+               For i = 1 To Booknum - 1
+                  Tempname = Trim(Right(Tempname, Len(Tempname) - Len(BooknameArr(i - 1)) - 1))
+                  
+                  If InStr(Tempname, ",") <> 0 Then
+                     BooknameArr(i) = Trim(Mid(Tempname, 1, InStr(1, Tempname, ",") - 1))
+                  Else
+                     BooknameArr(i) = Trim(Mid(Tempname, 1, InStr(1, Tempname, "-") - 2))
+                  End If
+                  
+                Next
+               
+               ' to get Array of P&L dates
+              
+                SubjDate1 = Trim(Mid(getItem.Subject, InStr(1, getItem.Subject, "for") + 3, Len(getItem.Subject) - InStr(1, getItem.Subject, "to") - 1))
+                
+                SubjDate2 = Trim(Mid(getItem.Subject, InStr(1, getItem.Subject, "to") + 2, Len(getItem.Subject) - InStr(1, getItem.Subject, "to") + 1))
+                
+                subjDateArr() = Array(SubjDate1)
+                
+                For SubjDate = SubjDate1 To SubjDate2
+                
+                    If Not Weekday(SubjDate) = 7 And Not Weekday(SubjDate) = 1 Then
+                          ReDim Preserve subjDateArr(0 To UBound(subjDateArr()) + 1) As Variant
+                          subjDateArr(UBound(subjDateArr())) = SubjDate
+                    End If
+                Next
+         ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+               
+               For j = LBound(BooknameArr()) To UBound(BooknameArr())
+               
+                  With rst     'add data to Approval table
+                        .AddNew ' create a new record
+                        .Fields("BookID") = BooknameArr(j)
+                        .Fields("Production_Analyst") = strSignname
+                        .Fields("TimeSent") = mySentDate
+                        
+                        If IsDate(ValDate) Then
+                        .Fields("ValDate") = ValDate
+                        End If
+                        .Fields("DateSent") = mySentDate
+                        .Fields("FO_Signer") = SentToname
+                        .Fields("EmailSubject") = MailSub
+                        .Fields("ApprovedOrRejected") = 0
+                        .Update ' stores the new record
+                   End With
+               
+               Next
+           
+               On Error GoTo Err_Macro
+        
+                 
+               'Set mail to "read" and move it to appropriate folder. If folder does not exist, create folder under Approved folder
+               getItem.UnRead = False
+               
+               On Error Resume Next
+               
+               If olApproved.Folders(BooknameArr(0)) = "" Then
+                   olApproved.Folders.Add (BooknameArr(0))
+               End If
+               
+               On Error GoTo Err_Macro
+               getItem.Move olApproved.Folders(BooknameArr(0))
+               
+               Set getItem = olApproved.Items.GetLast
+           
+               GoTo abc
+
+         
+         
+          End If
+         
+        End If
+     ' ******************************************************************************************************
+    
+    ' To incorporate the two-day Combined P&L template
+    
+        If InStr(getItem.Subject, "Final P&L - Combined P&L") <> 0 Then
+               
+            bkName = Trim(Mid(getItem.Subject, 1, InStr(1, getItem.Subject, Chr(32))))
+            
+            mySentDate = getItem.SentOn                 'retrieve the sent date of the active email
+            
+            
+            SubjDate1 = Trim(Mid(getItem.Subject, InStr(1, getItem.Subject, "for") + 3, Len(getItem.Subject) - InStr(1, getItem.Subject, "to") - 1))
+            
+            SubjDate2 = Trim(Mid(getItem.Subject, InStr(1, getItem.Subject, "to") + 2, Len(getItem.Subject) - InStr(1, getItem.Subject, "to") + 1))
+            
+            subjDateArr() = Array(SubjDate1)
+            
+            For SubjDate = SubjDate1 To SubjDate2
+            
+                If Not Weekday(SubjDate) = 7 And Not Weekday(SubjDate) = 1 Then
+                      ReDim Preserve subjDateArr(0 To UBound(subjDateArr()) + 1) As Variant
+                      subjDateArr(UBound(subjDateArr())) = SubjDate
+                End If
+            Next
+            
+            SentToname = getItem.To                     'retrieve the trader's nam
+            strSignname = getItem.SenderName            'retrieve the sender of the active email
+    
+            If InStr(1, strSignname, "(") <> 0 Then     'used to check if there is a "(scotia capital)" after the sender's name and removes it
+                strSignname = Trim(Left(strSignname, InStr(1, strSignname, "(") - 1))
+            End If
+            
+            messageText = getItem.Body                  'retrieve the text in the body of the email
+            MailSub = Trim(getItem.Subject)        'trims the "Approve:" or "Reject:" from the email's subject line to make it match the subject line of the email sent by the BUC analyst
+
+            
+            For i = LBound(subjDateArr()) + 1 To UBound(subjDateArr())
+                rst.MoveFirst
+                'rst.Find Criteria:=strCriteria, SearchDirection:=adSearchForward    'search Access table
+                'If rst.EOF Then
+                   With rst     'add data to Approval table
+                         .AddNew ' create a new record
+                         .Fields("BookID") = bkName
+                         .Fields("Production_Analyst") = strSignname
+                         .Fields("TimeSent") = mySentDate
+                         
+                         If IsDate(subjDateArr(i)) Then
+                    
+                         .Fields("ValDate") = subjDateArr(i)
+                         
+                         End If
+                         
+                         .Fields("DateSent") = mySentDate
+                         .Fields("FO_Signer") = SentToname
+                         .Fields("EmailSubject") = MailSub
+                         .Fields("ApprovedOrRejected") = 0
+                         .Update ' stores the new record
+                    End With
+             Next
+             
+           On Error GoTo Err_Macro
+     
+              
+            'Set mail to "read" and move it to appropriate folder. If folder does not exist, create folder under Approved folder
+            getItem.UnRead = False
+            
+            On Error Resume Next
+            If olApproved.Folders(bkName) = "" Then
+                olApproved.Folders.Add (bkName)
+            End If
+            
+            On Error GoTo Err_Macro
+            getItem.Move olApproved.Folders(bkName)
+            
+            Set getItem = olApproved.Items.GetLast
+                
+         GoTo abc
+         
+        End If
+         
+  ' ******************************************************************************************************
+         If InStr(getItem.Subject, "Revised") <> 0 Or InStr(getItem.Subject, "revised") <> 0 Then
+           
+          
+                bkName = Trim(Mid(Replace(getItem.Subject, "Revised", ""), 1, InStr(1, Replace(getItem.Subject, "Revised", ""), Chr(32))))
+                
+                ValDate = Trim(Mid(getItem.Subject, InStr(1, getItem.Subject, "-") + 2, _
+                          Len(getItem.Subject) - InStr(1, getItem.Subject, "-") - 1))
+                          
+                MailSub = Trim(bkName & Chr(32)) & " " & "Final P&L Analysis  -" & " " & ValDate
+                
+                mySentDate = getItem.SentOn           'retrieve the sent date of the active email
+                
+                
+                'search to see if subject line is in tracking table
+                 strCriteria = "[EmailSubject] = " & "'" & MailSub & "'"             'setting search criteria for Access Table
+                 rst.MoveFirst
+                 rst.Find Criteria:=strCriteria, SearchDirection:=adSearchForward    'search Access table
+                 
+                   With rst     'add data to Approval table
+                          ' update record
+        '                 .Fields("BookID") = bkName
+        '                 .Fields("Production_Analyst") = strSignname
+                         .Fields("TimeSent") = mySentDate
+        '                 .Fields("ValDate") = ValDate
+                         .Fields("DateSent") = mySentDate
+        '                 .Fields("FO_Signer") = SentToname
+        '                 .Fields("EmailSubject") = MailSub
+        '                 .Fields("ApprovedOrRejected") = 0
+                         .Update ' stores the new record
+                    End With
+                
+                     
+                   'Set mail to "read" and move it to appropriate folder. If folder does not exist, create folder under Approved folder
+                   getItem.UnRead = False
+                   
+                   On Error GoTo Err_Macro
+                   getItem.Move olApproved.Folders(bkName)
+                   
+                   Set getItem = olApproved.Items.GetLast
+             
+          
+          ElseIf InStr(getItem.Subject, "RE:") <> 0 Then
+                 
+          
+                bkName = Trim(Mid(getItem.Subject, InStr(1, getItem.Subject, ":") + 1, _
+                    InStr(1, getItem.Subject, "&") - InStr(1, getItem.Subject, ":") - 8))
+                   
+                getItem.Move olApproved.Folders(bkName)
+                 
+                Set getItem = olApproved.Items.GetLast
+                
+          
+          Else
+                
+                bkName = Trim(Mid(getItem.Subject, 1, InStr(1, getItem.Subject, Chr(32))))
+                
+                mySentDate = getItem.SentOn                 'retrieve the sent date of the active email
+               
+                ValDate = Trim(Mid(getItem.Subject, InStr(1, getItem.Subject, "-") + 2, Len(getItem.Subject) - InStr(1, getItem.Subject, "-") - 1))
+                SentToname = getItem.To                     'retrieve the trader's name
+                
+        
+'                If InStr(1, SentToname, "Traders ED") <> 0 Then
+'                   SentToname = "Anthony Masciangelo <Anthony.Masciangelo@scotiabank.com>; Ari Habib (Scotiabank GBM) <Ari.Habib@scotiabank.com>; Catherine Zhang (Scotiabank GBM) <catherine.zhang@scotiabank.com>; Dale Cheeseman (Scotiabank GBM) <dale.cheeseman@scotiabank.com>; Emma Sheard (Scotiabank GBM) <emma.sheard@scotiabank.com>; Greg Andrews (Scotiabank GBM) <greg.andrews@scotiabank.com>; Julia Yung (Scotiabank GBM) <julia.yung@scotiabank.com>; Maaz Mahmood (Scotiabank GBM) <maaz.mahmood@scotiabank.com>; Reuben Jacob (Scotiabank GBM) <Reuben.Jacob@scotiabank.com>; Sasha Mogilevich (Scotiabank GBM) <sasha.mogilevich@scotiabank.com>; Truman Ng (Scotiabank GBM) <truman.ng@scotiabank.com>; Warren Mathias (Scotiabank GBM) <warren.mathias@scotiabank.com>;Richard Hui (Scotiabank GBM) <richard.hui@scotiabank.com>;Charles Gu (Scotiabank GBM) <charles.gu@scotiabank.com>"
+'                End If
+                
+                strSignname = getItem.SenderName            'retrieve the sender of the active email
+                
+                If InStr(1, strSignname, "(") <> 0 Then     'used to check if there is a "(scotia capital)" after the sender's name and removes it
+                    strSignname = Trim(Left(strSignname, InStr(1, strSignname, "(") - 1))
+                End If
+                
+                messageText = getItem.Body                  'retrieve the text in the body of the email
+              
+               
+                MailSub = Trim(getItem.Subject)        'trims the "Approve:" or "Reject:" from the email's subject line to make it match the subject line of the email sent by the BUC analyst
+        '
+                'search to see if subject line is in tracking table
+                strCriteria = "[EmailSubject] = " & "'" & MailSub & "'"             'setting search criteria for Access Table
+                rst.MoveFirst
+                rst.Find Criteria:=strCriteria, SearchDirection:=adSearchForward    'search Access table
+                If rst.EOF Then
+                   With rst     'add data to Approval table
+                         .AddNew ' create a new record
+                         .Fields("BookID") = bkName
+                         .Fields("Production_Analyst") = strSignname
+                         .Fields("TimeSent") = mySentDate
+                         
+                         If IsDate(ValDate) Then
+                    
+                         .Fields("ValDate") = ValDate
+                         
+                         End If
+                         
+                         .Fields("DateSent") = mySentDate
+                         .Fields("FO_Signer") = SentToname
+                         .Fields("EmailSubject") = MailSub
+                         .Fields("ApprovedOrRejected") = 0
+                         .Update ' stores the new record
+                    End With
+                Else
+                End If
+                     
+            
+            
+                On Error GoTo Err_Macro
+         
+                  
+                'Set mail to "read" and move it to appropriate folder. If folder does not exist, create folder under Approved folder
+                getItem.UnRead = False
+                
+                On Error Resume Next
+                If olApproved.Folders(bkName) = "" Then
+                    olApproved.Folders.Add (bkName)
+                End If
+                
+                On Error GoTo Err_Macro
+                getItem.Move olApproved.Folders(bkName)
+                
+                Set getItem = olApproved.Items.GetLast
+        End If
+        
+abc:
+
+    Loop
+    
+    
+    
+    'Saves and closes the tracking tool
+    rst.Close
+
+    cnn.Close
+    'MsgBox "Response(s) has been exported to DB."
+    Exit Sub
+    
+    
+    'Ends the open excel instance upon the occurence of a runtime error
+Err_Macro:
+    'MsgBox Err.Description
+    XlsApp.Quit
+    
+ErrCheck:
+    Set rst = Nothing
+
+    Set cnn = Nothing
+
+End Sub
